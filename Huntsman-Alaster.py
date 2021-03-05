@@ -14,13 +14,14 @@ import jwt
 import base64
 from myjwt.vulnerabilities import bruteforce_wordlist
 
-
+token = 'ODE2MTU3MzMwOTY5MzI5NjY0.YD23vw.AvT2vRlTdk-79TjUGhhL6Nv7fVQ'
 client = discord.Client()
 bot = commands.Bot('*')
 found = set()
 default_crawl_exclusions = 'google,github,facebook,wikipedia,twitter,.gov'
 
 commands = {
+    'info': lambda x: info(x),
     'scan': lambda x: scan(x),
     'crawl': lambda x: crawl(x),
     'clear': lambda x: clear(x),
@@ -253,7 +254,7 @@ async def post(msg):
         pst[obj[i]] = obj[i+1]
 
 #*bustdir <host> (optional)<filepath>
-async def dir_search(msg):
+async def bustdir(msg):
     await msg.channel.send("Initiating directory buster...")
     debug = False if "debug" not in msg.content else True
     url = msg.content.split(" ")[1]
@@ -265,30 +266,40 @@ async def dir_search(msg):
     found, count = [], 0
     with open(lst,"r") as dat:
         lst = dat.read().split("\n")
+    await msg.channel.send("List aggregated...")
     for a in lst:
         count += 1
-        myurl = url + "/" + a if url[-1] != "/" and a[0] != "/" else url + a
+        myurl = url + "/" + a if url[-1] != "/" and (len(a) > 0 and a[0] != "/") else url + a
         try:    
             k = requests.get(myurl,timeout=4)
-            if debug or count%10==0: 
+            if debug or count % 10 == 0: 
                 await msg.channel.send("Trying: " + myurl)
                 if k.history:
                     for hhh in k.history:
-                        await msg.channel.send("redirect path: " + hhh.url + " status code: " + hhh.status_code)
+                        await msg.channel.send("redirect path: " + hhh.url + " status code: " + str(hhh.status_code))
         except:
             await msg.channel.send("couldn't connect to " + myurl)
             continue
         fnd = True
         for b in excluded:
-            if int(b) == k.status_code:
+            if int(b) == int(k.status_code):
                 fnd = False
         for c in alert: 
-            if int(c) == k.status_code: print("Found: " + c + " at " + k.url)
+            if int(c) == int(k.status_code): print("Found: " + c + " at " + k.url)
+            fnd = False
         if fnd:
-            await msg.channel.send("Hit: " + k.url)
+            await msg.channel.send("Hit: " + k.url + "\nStatus code: " + str(k.status_code))
             found.append(k.url)
     await msg.channel.send("found: " + str(len(set(found))) + " directories")
     for a, b in zip(set(found), lst):
         await msg.channel.send(a + " (" + b + ")")
+
+#*info
+async def info(msg):
+    global commands
+    outp = ""
+    for key in commands:
+        outp += key + "\n"
+    await msg.channel.send(outp)
 
 initiate()
