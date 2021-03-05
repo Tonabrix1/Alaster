@@ -13,6 +13,7 @@ import binascii
 import jwt
 import base64
 from myjwt.vulnerabilities import bruteforce_wordlist
+import os
 
 token = 'ODE2MTU3MzMwOTY5MzI5NjY0.YD23vw.AvT2vRlTdk-79TjUGhhL6Nv7fVQ'
 client = discord.Client()
@@ -22,6 +23,7 @@ default_crawl_exclusions = 'google,github,facebook,wikipedia,twitter,.gov'
 
 commands = {
     'info': lambda x: info(x),
+    'ls': lambda x: listdir(x),
     'scan': lambda x: scan(x),
     'crawl': lambda x: crawl(x),
     'clear': lambda x: clear(x),
@@ -149,10 +151,10 @@ async def ping(msg):
 #*trace <host>
 async def trace(msg):
     host = [msg.content.split(" ")[1]]
-    old_stdout = sys.stdout
+    old = sys.stdout
     sys.stdout = buffer = io.StringIO()
     result, unans = traceroute(host,maxttl=32)
-    sys.stdout = old_stdout
+    sys.stdout = old
     ret = buffer.getvalue()
     await msg.channel.send(ret)
 
@@ -273,7 +275,7 @@ async def bustdir(msg):
         try:    
             k = requests.get(myurl,timeout=4)
             if debug or count % 10 == 0: 
-                await msg.channel.send("Trying: " + myurl)
+                await msg.channel.send("Try " + str(count) + ": " + myurl)
                 if k.history:
                     for hhh in k.history:
                         await msg.channel.send("redirect path: " + hhh.url + " status code: " + str(hhh.status_code))
@@ -285,14 +287,15 @@ async def bustdir(msg):
             if int(b) == int(k.status_code):
                 fnd = False
         for c in alert: 
-            if int(c) == int(k.status_code): print("Found: " + c + " at " + k.url)
-            fnd = False
+            if int(c) == int(k.status_code): 
+                await msg.channel.send("Found: " + str(c) + " at " + k.url)
+                fnd = False
         if fnd:
             await msg.channel.send("Hit: " + k.url + "\nStatus code: " + str(k.status_code))
             found.append(k.url)
     await msg.channel.send("found: " + str(len(set(found))) + " directories")
     for a, b in zip(set(found), lst):
-        await msg.channel.send(a + " (" + b + ")")
+        await msg.channel.send(b + " (" + a + ")")
 
 #*info
 async def info(msg):
@@ -301,5 +304,21 @@ async def info(msg):
     for key in commands:
         outp += key + "\n"
     await msg.channel.send(outp)
+
+
+#*listdir <path>
+async def listdir(msg):
+    command = os.getcwd() if len(msg.content.split(" ")) < 2 else (os.getcwd() + "/" if msg.content.split(" ")[1][0] != "/" else "") + msg.content.split(" ")[1]
+    lst = os.listdir(command)
+    outp, c = "", 0
+    for a in lst:
+        c += 1
+        outp += a + ", " if lst[-1] != a else a
+        if c >= 20: 
+            await msg.channel.send(outp)
+            outp, c = "", 0
+    if outp != "":        
+        await msg.channel.send(outp)
+ 
 
 initiate()
