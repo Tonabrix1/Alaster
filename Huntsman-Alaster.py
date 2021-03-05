@@ -260,7 +260,7 @@ async def bustdir(msg):
     await msg.channel.send("Initiating directory buster...")
     debug = False if "debug" not in msg.content else True
     url = msg.content.split(" ")[1]
-    excluded = 404 if "ex:\'" not in msg.content else str(msg.content.split("enc:\'")[1]).split("\'")[0]
+    excluded = 404 if "ex:\'" not in msg.content else str(msg.content.split("ex:\'")[1]).split("\'")[0]
     alert = 403 if "alrt:\'" not in msg.content else str(msg.content.split("alrt:\'")[1]).split("\'")[0]
     excluded = [excluded] if "," not in str(excluded) else excluded.split(",")
     alert = [alert] if "," not in str(alert) else alert.split(",")
@@ -274,8 +274,8 @@ async def bustdir(msg):
         myurl = url + "/" + a if url[-1] != "/" and (len(a) > 0 and a[0] != "/") else url + a
         try:    
             k = requests.get(myurl,timeout=4)
-            if debug or count % 10 == 0: 
-                await msg.channel.send("Try " + str(count) + ": " + myurl)
+            if debug or count % 15 == 0: 
+                await msg.channel.send("Try #" + str(count) + ": " + myurl)
                 if k.history:
                     for hhh in k.history:
                         await msg.channel.send("redirect path: " + hhh.url + " status code: " + str(hhh.status_code))
