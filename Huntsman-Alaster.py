@@ -89,6 +89,8 @@ async def clear(msg):
 # util
 async def process_commands(msg):
     global commands
+    mes = msg.content.split(" ")
+    for i in range(mes): if mes[i] == "" 
     func = commands.get(str(msg.content.split(" ")[0][1:]).lower())
     await func(msg)
 
@@ -130,7 +132,7 @@ async def crawl(msg):
     await msg.channel.send("Crawling...")
     global found, default_crawl_exclusions, halt_flag
     url = await splitmsg(msg, " ", 1)
-    excludes = default_crawl_exclusions if len(msg.content.split(" ")) <= 2 else \
+    excludes = await chopcsl(default_crawl_exclusions) if len(msg.content.split(" ")) <= 2 else \
         await chopcsl(await splitmsg(msg, " ", 2))
     await recursive_crawl(url, msg, excludes)
     outp, i = "", 0
@@ -141,7 +143,7 @@ async def crawl(msg):
         if i % 5 == 0:
             await msg.channel.send("Final list #" + str(int(i / 8)) + ": \n" + str(outp))
             outp = ""
-    if outp != "": await msg.channel.send("Final list #" + str(int(i / 8)) + ": \n" + str(outp))
+    if outp != "": await msg.channel.send("Final list #" + str(int(i / 8) + 1) + ": \n" + str(outp))
     found = set()
     if halt_flag: halt_flag = False
 
@@ -162,7 +164,7 @@ async def recursive_crawl(url, msg, excludes):
     for link in links:
         if link not in found and url + link not in found and link[0] != '#':
             found.add(link)
-            if len(link > 1) and link[0] == "/" and url[-1] != "/": found.add(url + link)
+            if len(link) > 1 and link[0] == "/" and url[-1] != "/": found.add(url + link)
             await msg.channel.send("found: " + str(link))
             if halt_flag:
                 await msg.channel.send("cancelling...")
@@ -349,7 +351,7 @@ async def postraw(msg):
 async def getraw(msg):
     host = await splitmsg(msg, " ", 1)
     hd = await checkoptional(msg, 'head', {})
-    hd = await dictfromcsl(await chopcsl(hd))
+    if hd != {}: hd = await dictfromcsl(await chopcsl(hd))
     ck = await checkoptional(msg, 'ck', '')
     req = requests.get(host, headers=hd, cookies=ck)
     await sendchunk(msg, req.headers)
@@ -378,7 +380,7 @@ async def sendchunk(msg, s, length=100):
 async def checkoptional(msg, s, default): return default if s not in msg.content else \
     str(msg.content.lower().split(s+":\'")[1]).split("\'")[0]
 
-# *bustdir <host> (optional)<filepath>
+# *bustdir <host> <filepath> ex:'<excluded codes>' alrt:'<alert codes>' start:'<index>'
 async def bustdir(msg):
     global halt_flag
     await msg.channel.send("Initiating directory buster...")
@@ -389,11 +391,11 @@ async def bustdir(msg):
     excluded = [excluded] if "," not in str(excluded) else await chopcsl(excluded)
     alert = [alert] if "," not in str(alert) else await chopcsl(alert)
     lst = "dirlists1.txt" if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
-    fnd, count = [], 0
+    fnd, count = [], int(await checkoptional(msg, 'start', 0))
     try:
         path = os.getcwd() + (lst if os.getcwd()[-1] == "/" or lst[0] == "/" else "/" + lst)
         if os.getcwd()[-1] == "/" and lst[0] == "/": path = os.getcwd() + url[1:]
-        with open(path, "r") as dat:
+        with open(path, "r",encoding="utf-8" if "rockyou.txt" not in path else "latin-1") as dat:
             await msg.channel.send("Found file at: " + path)
             lst = dat.read().split("\n")
     except FileNotFoundError:
@@ -401,7 +403,7 @@ async def bustdir(msg):
                                (lst if os.getcwd()[-1] == "/" or (len(lst) > 1 and lst[0] == "/") else "/" + lst))
         return
     await msg.channel.send("List aggregated...")
-    for dir in lst:
+    for dir in lst[count:]:
         count += 1
         safe_url = url if url[-1] != "/" or (len(dir) > 1 and dir[0] != "/") else url[:-1]
         safe_dir = dir if url[-1] == '/' or (len(dir) > 1 and dir[0]) == '/' else "/" + dir
@@ -411,27 +413,28 @@ async def bustdir(msg):
         if debug or count % 15 == 0:
             if halt_flag:
                 await msg.channel.send("Canceling attack...")
+                await msg.channel.send("Final list: " + fnd)
                 halt_flag = False
                 return
             await msg.channel.send("Try #" + str(count) + ": " + myurl)
         if k.history:
             for hhh in k.history:
                 await msg.channel.send("redirect path: " + hhh.url + " status code: " + str(hhh.status_code))
-        fnd = True
+        fd = True
         # except:
         #    await msg.channel.send("couldn't connect to " + myurl)
         #    fnd = False
         if int(k.status_code) in [int(a) for a in excluded]:
-            fnd = False
+            fd = False
         if int(k.status_code) in [int(a) for a in alert]:
             await msg.channel.send("Found: " + str(k.status_code) + " at " + k.url)
-            fnd = False
-        if fnd:
+            fd = False
+        if fd:
             await msg.channel.send("Hit: " + k.url + "\nStatus code: " + str(k.status_code))
-            fnd.append(k.url)
+            fnd.append(str(k.url))
     await msg.channel.send("found: " + str(len(set(fnd))) + " directories")
-    for a, b in zip(set(found), lst):
-        await msg.channel.send(a + b if (len(b) > 0 and b[0] == "/") or a[-1] == "/" else "/" + b)
+    for b in set(found):
+        await msg.channel.send(url + b if (len(b) > 0 and b[0] == "/") or a[-1] == "/" else "/" + b)
 
 
 # *info
