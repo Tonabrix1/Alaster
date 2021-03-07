@@ -38,7 +38,13 @@ commands = {
     **dict.fromkeys(['post', 'scrapepost'], lambda x: post(x)),
     **dict.fromkeys(['postraw', 'rawpost'], lambda x: postraw(x)),
     **dict.fromkeys(['getraw', 'rawget'], lambda x: getraw(x)),
-    **dict.fromkeys(['bustdir', 'dirbust', 'dirbuster', 'dirsearch', 'searchdirs'], lambda x: bustdir(x))
+    **dict.fromkeys(['bustdir', 'dirbust', 'dirbuster', 'dirsearch', 'searchdirs'], lambda x: bustdir(x)),
+    **dict.fromkeys(['snglhex', 'strurlhex', 'urlhex', 'urlencode',
+                     'singlehex', 'snglhex', 'str2urlhex'], lambda x: strtourlhex(x)),
+    **dict.fromkeys(['dbhex', 'strdburlhex', 'dburlhex', 'dburlencode',
+                     'doublehex', 'str2dburlhex', 'dbenc'], lambda x: strtodoubleurlhex(x)),
+    **dict.fromkeys(['crackuser', 'crackusername', 'cracku', 'bruteuser', 'bfuser'], lambda x: crackuser(x)),
+    **dict.fromkeys(['crackpass', 'crackpassword', 'crackp', 'brutepass', 'bfpass'], lambda x: crackpass(x))
 }
 
 
@@ -53,15 +59,16 @@ async def on_ready(): print('We have logged in as {0.user}'.format(client))
 @client.event
 async def on_message(msg):
     global halt_flag, halt_keywords
-    mes = msg.content.lower()
-    for key in halt_keywords:
-        if key in mes: halt_flag = True
-    if mes[0] == bot.command_prefix: await process_commands(msg)
+    if msg.author is not bot.user:
+        mes = msg.content.lower()
+        for key in halt_keywords:
+            if key in mes: halt_flag = True
+        if mes[0] == bot.command_prefix: await process_commands(msg)
 
 
 # clear <num> or "all" for all messages
 async def clear(msg):
-    num = msg.content.split(" ")[1]
+    num = await splitmsg(msg, " ", 1)
     if num != 'all':
         number = int(num) + 1  # Converting the amount of messages to delete to an integer
         counter = 0
@@ -87,7 +94,7 @@ async def process_commands(msg):
 async def scan(msg):
     await msg.channel.send("Initiating scan, this may take a while...")
     nm = nmap.PortScanner()
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     port = await checkoptional(msg, 'ports',"1-1024")
     args = await checkoptional(msg, 'args',"-sS -vv")
     nm.scan(hosts=host, ports=port, arguments=args)
@@ -119,9 +126,9 @@ async def pretty_nmap(nm, msg):
 async def crawl(msg):
     await msg.channel.send("Crawling...")
     global found, default_crawl_exclusions, halt_flag
-    url = msg.content.split(" ")[1]
+    url = await splitmsg(msg, " ", 1)
     excludes = default_crawl_exclusions if len(msg.content.split(" ")) <= 2 else \
-        str(msg.content.split(" ")[2]).split(",")
+        await chopcsl(await splitmsg(msg, " ", 2))
     await recursive_crawl(url, msg, excludes)
     outp, i = "", 0
     for a in found:
@@ -167,7 +174,7 @@ async def recursive_crawl(url, msg, excludes):
 
 # *ping <host>
 async def ping(msg):
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     try: addr = socket.gethostbyname_ex(host)
     except socket.gaierror:
         await msg.channel.send("Couldn't get address info for that domain.")
@@ -182,7 +189,7 @@ async def ping(msg):
 
 # *trace <host>
 async def trace(msg):
-    host = [msg.content.split(" ")[1]]
+    host = [await splitmsg(msg, " ", 1)]
     old, buf = await qstdout()
     try: traceroute(host, maxttl=32)
     except socket.gaierror:
@@ -207,14 +214,14 @@ async def deqstdout(old, buf):
 
 # *whois <host>
 async def whois(msg):
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     a = who.whois(host)
     await msg.channel.send(a)
 
 
 # *scrape <host> split:'<string>' len:'<len>'
 async def scrape(msg):
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     length = await checkoptional(msg, 'len', 10000)
     splt = await checkoptional(msg, 'split', None)
     msg.channel.send("Scraping data...")
@@ -234,7 +241,7 @@ async def scrape(msg):
 
 # decodejwt <token>
 async def decode_jwt(msg):
-    tk = msg.content.split(" ")[1]
+    tk = await splitmsg(msg, " ", 1)
     tk = tk.split(".")
     header = base64.urlsafe_b64decode(tk[0] + '=' * (4 - len(tk[0]) % 4))
     payload = base64.urlsafe_b64decode(tk[1] + '=' * (4 - len(tk[1]) % 4))
@@ -244,21 +251,21 @@ async def decode_jwt(msg):
 
 # decodeb64 <string>
 async def decodeb64(msg):
-    string = bytes(str(msg.content.split(" ")[1]), 'utf-8')
+    string = bytes(str(await splitmsg(msg, " ", 1)), 'utf-8')
     ans = base64.b64decode(string)
     await msg.channel.send(ans.decode("utf-8"))
 
 
 # encodeb64 <string>
 async def encodeb64(msg):
-    string = bytes(str(msg.content.split(" ")[1]), 'utf-8')
+    string = bytes(await splitmsg(msg, " ", 1), 'utf-8')
     ans = base64.b64encode(string)
     await msg.channel.send(ans.decode("utf-8"))
 
 
 # *inttobin size:'<size>' base:'<base>'
 async def int2binary(msg):
-    print("Calculating")
+    await msg.channel.send("Calculating")
     try:
         size = await checkoptional(msg, 'size', 8)
     except TypeError:
@@ -269,7 +276,7 @@ async def int2binary(msg):
     except TypeError:
         await msg.channel.send("The base variable must be an integer.")
         base = 10
-    inp = int(msg.content.split(" ")[1], base)
+    inp = int(await splitmsg(msg, " ", 1), base)
     bin_lst = list("0" * size)
     for f in bin_lst[:len(str(inp))]:
         bin_lst.remove(f)
@@ -282,8 +289,8 @@ async def int2binary(msg):
 # *crackjwt <csl, no spaces token> <filepath>
 async def crackjwt(msg):
     await msg.channel.send("Cracking jwt...")
-    payload = await chopcsl(msg.content.split(" ")[1])
-    lst = msg.content.split(" ")[2]
+    payload = await chopcsl(await splitmsg(msg, " ", 1))
+    lst = await splitmsg(msg, " ", 2)
     enc = await dictfromcsl(payload)
     key = bruteforce_wordlist(json.dumps(enc), lst)
     await msg.channel.send("Key: " + str(key))
@@ -292,8 +299,8 @@ async def crackjwt(msg):
 # *forgejwt <csl, no spaces payload> <key> enc:'<encoding>'
 async def forgejwt(msg):
     await msg.channel.send("Forging jwt...")
-    payload = await chopcsl(msg.content.split(" ")[1])
-    key = msg.content.split(" ")[2]
+    payload = await chopcsl(await splitmsg(msg, " ", 1))
+    key = await splitmsg(msg, " ", 2)
     enc = await checkoptional(msg, 'enc', 'HS256')
     values = await dictfromcsl(payload)
     encoded = jwt.encode(values, key, enc)
@@ -302,9 +309,9 @@ async def forgejwt(msg):
 
 # *post <host> <csl no spaces, obj> dat:'<data>'
 async def post(msg):
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     await msg.channel.send("Posting to: " + host)
-    obj = await chopcsl(msg.content.split(" ")[2])
+    obj = await chopcsl(await splitmsg(msg, " ", 2))
     pst = await dictfromcsl(obj)
     dat = await checkoptional(msg, 'dat', '')
     resp = requests.post(url=host, headers=pst, data=dat).text
@@ -326,7 +333,7 @@ async def dictfromcsl(csl):
 
 # *postraw <host> head:'<csl no spaces, headers>' dat:'<dat>'
 async def postraw(msg):
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     hd = await checkoptional(msg, 'head', {})
     hd = await dictfromcsl(await chopcsl(hd))
     dat = await checkoptional(msg, 'dat', '')
@@ -337,12 +344,18 @@ async def postraw(msg):
 
 # *getraw <host> head:'<csl no spaces, headers>' ck:'<cookies>'
 async def getraw(msg):
-    host = msg.content.split(" ")[1]
+    host = await splitmsg(msg, " ", 1)
     hd = await checkoptional(msg, 'head', {})
     hd = await dictfromcsl(await chopcsl(hd))
     ck = await checkoptional(msg, 'ck', '')
     req = requests.get(host, headers=hd, cookies=ck)
     await sendchunk(msg, req.headers)
+
+
+# util
+async def splitmsg(msg, char, indx):
+    if len(msg.content.split(char)) > indx: return msg.content.split(char)[indx]
+    else: await msg.channel.send("List requires " + str(indx) + " args split by \'" + char + "\'")
 
 
 # util
@@ -359,19 +372,20 @@ async def sendchunk(msg, s, length=100):
 
 
 # util
-async def checkoptional(msg, s, default): return default if s not in msg.content else str(msg.content.split(s+":\'")[1]).split("\'")[0]
+async def checkoptional(msg, s, default): return default if s not in msg.content else \
+    str(msg.content.lower().split(s+":\'")[1]).split("\'")[0]
 
 # *bustdir <host> (optional)<filepath>
 async def bustdir(msg):
     global halt_flag
     await msg.channel.send("Initiating directory buster...")
     debug = False if "debug" not in msg.content else True
-    url = msg.content.split(" ")[1]
-    excluded = checkoptional(msg, 'ex', 404)
-    alert = checkoptional(msg, 'alrt', 403)
+    url = await splitmsg(msg, " ", 1)
+    excluded = await checkoptional(msg, 'ex', 404)
+    alert = await checkoptional(msg, 'alrt', 403)
     excluded = [excluded] if "," not in str(excluded) else await chopcsl(excluded)
     alert = [alert] if "," not in str(alert) else await chopcsl(alert)
-    lst = "dirlists1.txt" if len(msg.content.split(" ")) <= 2 else msg.content.split(" ")[2]
+    lst = "dirlists1.txt" if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
     fnd, count = [], 0
     try:
         path = os.getcwd() + (lst if os.getcwd()[-1] == "/" or lst[0] == "/" else "/" + lst)
@@ -431,7 +445,7 @@ async def info(msg):
 # *listdir <path>
 async def listdir(msg):
     command = os.getcwd() if len(msg.content.split(" ")) < 2 else \
-        (os.getcwd() + "/" if msg.content.split(" ")[1][0] != "/" else "") + msg.content.split(" ")[1]
+        (os.getcwd() + "/" if await splitmsg(msg, " ", 1)[0] != "/" else "") + await splitmsg(msg, " ", 1)
     lst = os.listdir(command)
     outp, c = "", 0
     for a in lst:
@@ -449,6 +463,89 @@ async def hextostr(msg):
     hx = bytes.fromhex(hx[2:-2])
     hx = hx.decode("utf-8")
     await msg.channel.send(hx)
+
+async def strtourlhex(msg):
+    s = await splitmsg(msg, " ", 1)
+    ret = ""
+    for a in s:
+        ret += "%" + str(bytes.hex(a.encode("utf-8")))
+    await msg.channel.send(ret)
+
+
+async def strtodoubleurlhex(msg):
+    s = await splitmsg(msg, " ", 1)
+    ret = ""
+    for a in s:
+        ret += "%25" + str(bytes.hex(a.encode("utf-8")))
+    await msg.channel.send(ret)
+
+
+# *crackuser <host> <filepath> ex:'<excludes>' start:'<startpoint>' pw:'<password>'
+async def crackuser(msg):
+    global halt_flag
+    url = await splitmsg(msg, " ", 1)
+    data = "rockyou.txt" if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
+    pw = await checkoptional(msg, "pw", '')
+    startpoint = int(await checkoptional(msg, "start", 0))
+    excluded = await checkoptional(msg, "ex", "invalid u")
+    try:
+        path = os.getcwd() + (data if os.getcwd()[-1] == "/" or data[0] == "/" else "/" + data)
+        if os.getcwd()[-1] == "/" and data[0] == "/": path = os.getcwd() + url[1:]
+        with open(path, "r", encoding='latin-1' if "rockyou" in path else 'utf-8') as dat:
+            await msg.channel.send("Found file at: " + path)
+            data = dat.read().split("\n")
+    except FileNotFoundError:
+        await msg.channel.send("File couldn't be found at path: " + os.getcwd() +
+                               (data if os.getcwd()[-1] == "/" or (len(data) > 1 and data[0] == "/") else "/" + data))
+    obj, count = {'username': '', 'password': pw}, startpoint
+    for name in data[startpoint:]:
+        if halt_flag:
+            await msg.channel.send("Canceling attack...")
+            halt_flag = False
+            return
+        count += 1
+        obj['username'] = name
+        x = requests.post(url, obj)
+        if excluded not in x.text.lower():
+            await msg.channel.send(x.text)
+            await msg.channel.send("key:" + name + "\nAt website: " + url)
+            return
+        if count % 25 == 0: await msg.channel.send("attempt: " + str(count) + " last name used: " + name)
+    await msg.channel.send("couldn't find it")
+
+
+# *crackpass <host> <filepath> ex:'<excludes>' start:'<startpoint>' user:'<username>'
+async def crackpass(msg):
+    global halt_flag
+    url = await splitmsg(msg, " ", 1)
+    data = "rockyou.txt" if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
+    name = await checkoptional(msg, "user", '')
+    startpoint = int(await checkoptional(msg, "start", 0))
+    excluded = await checkoptional(msg, "ex", "invalid p")
+    try:
+        path = os.getcwd() + (data if os.getcwd()[-1] == "/" or data[0] == "/" else "/" + data)
+        if os.getcwd()[-1] == "/" and data[0] == "/": path = os.getcwd() + url[1:]
+        with open(path, "r", encoding='latin-1' if "rockyou" in path else 'utf-8') as dat:
+            await msg.channel.send("Found file at: " + path)
+            data = dat.read().split("\n")
+    except FileNotFoundError:
+        await msg.channel.send("File couldn't be found at path: " + os.getcwd() +
+                               (data if os.getcwd()[-1] == "/" or (len(data) > 1 and data[0] == "/") else "/" + data))
+    obj, count = {'username': name, 'password': ''}, startpoint
+    for pw in data[startpoint:]:
+        if halt_flag:
+            await msg.channel.send("Canceling attack...")
+            halt_flag = False
+            return
+        count += 1
+        obj['password'] = pw
+        x = requests.post(url, obj)
+        if excluded not in x.text.lower():
+            await msg.channel.send(x.text)
+            await msg.channel.send("key:" + pw + "\nAt website: " + url)
+            return
+        if count % 25 == 0: await msg.channel.send("attempt: " + str(count) + " last pass used: " + pw)
+    await msg.channel.send("couldn't find it")
 
 
 initiate()
