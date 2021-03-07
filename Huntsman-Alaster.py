@@ -7,14 +7,14 @@ from scapy.layers.inet import traceroute
 # python-whois
 import whois as who
 # py-jwt
-import python_jwt as jwt
+import jwt
 from myjwt.vulnerabilities import bruteforce_wordlist
 
 token = 'ODE2MTU3MzMwOTY5MzI5NjY0.YD23vw.AvT2vRlTdk-79TjUGhhL6Nv7fVQ'
 client = discord.Client()
 bot = commands.Bot('*')
 found = set()
-default_crawl_exclusions = ''  # 'google,github,facebook,wikipedia,twitter,.gov'
+default_crawl_exclusions = 'google, github, facebook, wikipedia, twitter, .gov'
 halt_keywords = ['halt', 'stop', 'quit', 'exit', 'abort', 'cancel', 'wait']
 halt_flag = False
 
@@ -68,11 +68,14 @@ async def on_message(msg):
 
 # clear <num> or "all" for all messages
 async def clear(msg):
+    global halt_flag
     num = await splitmsg(msg, " ", 1)
     if num != 'all':
         number = int(num) + 1  # Converting the amount of messages to delete to an integer
         counter = 0
         async for x in msg.channel.history(limit=number):
+            if halt_flag:
+                await msg.channel.send("Cancelling...")
             if counter < number:
                 await x.delete()
                 counter += 1
