@@ -8,7 +8,9 @@ from scapy.layers.inet import traceroute
 import whois as who
 # py-jwt
 import jwt
-from myjwt.vulnerabilities import bruteforce_wordlist
+from myjwt.utils import jwt_to_json
+from myjwt.modify_jwt import signature
+from requests_toolbelt.utils import dump
 
 token = 'ODE2MTU3MzMwOTY5MzI5NjY0.YD23vw.AvT2vRlTdk-79TjUGhhL6Nv7fVQ'
 client = discord.Client()
@@ -28,12 +30,13 @@ commands = {
     **dict.fromkeys(['trace', 'traceroute'], lambda x: trace(x)),
     **dict.fromkeys(['whois', 'who', 'dnslookup'], lambda x: whois(x)),
     **dict.fromkeys(['scrape', 'get'], lambda x: scrape(x)),
-    **dict.fromkeys(['decodejwt', 'jwtdecode'], lambda x: decode_jwt(x)),
+    **dict.fromkeys(['decodejwt', 'jwtdecode', 'jwt'], lambda x: decode_jwt(x)),
     **dict.fromkeys(['decodeb64', 'b64decode'], lambda x: decodeb64(x)),
-    **dict.fromkeys(['hextostr', 'hex2str', 'decodehex', 'hexdecode'], lambda x: hextostr(x)),
+    **dict.fromkeys(['hextostr', 'hex2str', 'decodehex', 'hexdecode', 'hstr'], lambda x: hextostr(x)),
+    **dict.fromkeys(['strtohex', 'hex', 'hexencode', 'ashex'], lambda x: strtohex(x)),
     **dict.fromkeys(['encodeb64', 'b64encode'], lambda x: encodeb64(x)),
     **dict.fromkeys(['inttobin', 'int2bin', 'bin', 'binint'], lambda x: int2binary(x)),
-    **dict.fromkeys(['crackjwt', 'jwtcrack'], lambda x: crackjwt(x)),
+    **dict.fromkeys(['crackjwt', 'jwtcrack, breakjwt, jwtcracker, jwtbreaker'], lambda x: crackjwt(x)),
     **dict.fromkeys(['forgejwt', 'makejwt', 'newjwt'], lambda x: forgejwt(x)),
     **dict.fromkeys(['post', 'scrapepost'], lambda x: post(x)),
     **dict.fromkeys(['postraw', 'rawpost'], lambda x: postraw(x)),
@@ -54,7 +57,7 @@ def initiate(): client.run(token)
 
 @client.event
 async def on_ready(): print('We have logged in as {0.user}'.format(client))
-
+    
 
 @client.event
 async def on_message(msg):
@@ -66,7 +69,12 @@ async def on_message(msg):
         if mes[0] == bot.command_prefix: await process_commands(msg)
 
 
-# clear <num> or "all" for all messages
+async def strtohex(msg):
+    s = await splitmsg(msg, " ", 1)
+    pass
+
+
+#clear <num> or all for as many as the bot can without timing out
 async def clear(msg):
     global halt_flag
     num = await splitmsg(msg, " ", 1)
@@ -90,10 +98,13 @@ async def clear(msg):
 async def process_commands(msg):
     global commands
     mes = msg.content.split(" ")
-    for i in range(mes): if mes[i] == "" 
-    func = commands.get(str(msg.content.split(" ")[0][1:]).lower())
-    await func(msg)
-
+    for i in range(len(mes)): 
+        if mes[i] == "" and len(mes) > i and mes[i+1] == "": del mes[i+1]
+        func = commands.get(str(msg.content.split(" ")[0][1:]).lower())
+    try:
+        await func(msg)
+    except TypeError:
+        await msg.channel.send("Unrecognized command: " + msg.content.split(" ")[0][1:])
 
 # *scan <host> ports:'<ports>' args:'<args>'
 async def scan(msg):
@@ -159,24 +170,23 @@ async def recursive_crawl(url, msg, excludes):
     page = html.fromstring(resp.content)
     links = set(page.xpath('//a/@href'))
     links.update(page.xpath('//img/@src'))
-    found.add(url)
-    print(links)
+    found.add(resp.url)
     for link in links:
-        if link not in found and url + link not in found and link[0] != '#':
-            found.add(link)
-            if len(link) > 1 and link[0] == "/" and url[-1] != "/": found.add(url + link)
+        if link not in found and await formatlink(url, link) not in found and await formatlink(url.split("/")[:-1],link) not in found and link[0] != "#" and link != "./":
+            for a in [link, await formatlink(url,link), await formatlink(url.split("/")[:-1],link)]:
+                    try: 
+                        m = requests.get(a)
+                        if int(m.status_code) != 404: found.add(a)
+                    except: continue
             await msg.channel.send("found: " + str(link))
             if halt_flag:
                 await msg.channel.send("cancelling...")
                 return found
-            try:
-                await recursive_crawl(link, msg, excludes)
+            try: await recursive_crawl(link, msg, excludes)
             except requests.exceptions.MissingSchema:
-                safe_url = url if url[-1] == "/" and len(link) > 1 and link[0] == "/" else url[:-1]
-                safe_link = link if safe_url[-1] == '/' or link[0] == '/' else "/" + link
-                await recursive_crawl(safe_url + safe_link, msg, excludes)
-
-
+                try: await recursive_crawl(await formatlink(url, link), msg, excludes)
+                except requests.exceptions.MissingSchema: await recursive_crawl(await formatlink(url.split("/")[:-1], link), msg, excludes)
+                        
 # *ping <host>
 async def ping(msg):
     host = await splitmsg(msg, " ", 1)
@@ -291,25 +301,53 @@ async def int2binary(msg):
     await msg.channel.send(str(bin(int(outp)))[2:])
 
 
-# *crackjwt <csl, no spaces token> <filepath>
+# *crackjwt <token> <filepath>
 async def crackjwt(msg):
     await msg.channel.send("Cracking jwt...")
-    payload = await chopcsl(await splitmsg(msg, " ", 1))
+    payload = await splitmsg(msg, " ", 1)
     lst = await splitmsg(msg, " ", 2)
-    enc = await dictfromcsl(payload)
-    key = bruteforce_wordlist(json.dumps(enc), lst)
-    await msg.channel.send("Key: " + str(key))
+    payld = jwt_to_json(payload)
+    with open(lst, encoding="latin-1") as file:
+        all_password,c = [line.rstrip() for line in file], 0
+    await msg.channel.send("List aggregated, starting attack...")
+    for password in all_password:
+        c += 1
+        if halt_flag:
+            await msg.channel.send("Cancelling attack...")
+            return
+        newpayld = signature(payld, password)
+        if c % 5000 == 0: await msg.channel.send("Try #:" + str(c) + " " + password + " : " + str(newpayld))
+        newsig = '' if len(str(newpayld).split(".")) <= 2 else str(newpayld).split(".")[2]
+        if len(newsig) > 3 and len(str(payld).split(".")) > 2 and newsig == str(payld).split(".")[2]:
+            key = password
+        key =""
+    await msg.channel.send("Key: " + str(key) if len(key) > 0 else "couldn't be found...")
 
 
 # *forgejwt <csl, no spaces payload> <key> enc:'<encoding>'
 async def forgejwt(msg):
     await msg.channel.send("Forging jwt...")
     payload = await chopcsl(await splitmsg(msg, " ", 1))
-    key = await splitmsg(msg, " ", 2)
+    key = '' if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
     enc = await checkoptional(msg, 'enc', 'HS256')
-    values = await dictfromcsl(payload)
-    encoded = jwt.encode(values, key, enc)
+    values = await dictfromcsl(msg, payload)
+    if enc == 'none':
+        encoded = jwt.encode(values, None, enc)
+        await msg.channel.send(encoded)
+        return
+    if key != '':
+        encoded = jwt.encode(values, key, enx)
+    else: 
+        encoded = list()
+        encoded.append(jwt.encode(values, key, enc))
+        encoded.append(jwt.encode(values, ' ', enc))
     await msg.channel.send(encoded)
+
+
+async def b64urlencode(data):
+    byt = bytes(data, 'utf-8')
+    encod = str(base64.b64encode(byt))
+    return encod.replace('+', '-').replace('/', '_').replace('=', '')
 
 
 # *post <host> <csl no spaces, obj> dat:'<data>'
@@ -317,7 +355,7 @@ async def post(msg):
     host = await splitmsg(msg, " ", 1)
     await msg.channel.send("Posting to: " + host)
     obj = await chopcsl(await splitmsg(msg, " ", 2))
-    pst = await dictfromcsl(obj)
+    pst = await dictfromcsl(msg, obj)
     dat = await checkoptional(msg, 'dat', '')
     resp = requests.post(url=host, headers=pst, data=dat).text
     await msg.channel.send(resp)
@@ -328,33 +366,42 @@ async def chopcsl(csl) -> list: return str(csl).strip(" ").split(",")
 
 
 # util
-async def dictfromcsl(csl):
+async def dictfromcsl(msg, csl):
     pst = dict()
+    if len(csl) < 2 or len(csl) % 2 != 0:
+        await msg.channel.send("Comma separated list: " + str(csl) + " must be at least length 2 and even.")
+        return None
     for i in range(len(csl)):
-        if i % 2 == 0: continue
+        if i % 2 == 1: continue
         pst[csl[i]] = csl[i + 1]
     return pst
 
 
-# *postraw <host> head:'<csl no spaces, headers>' dat:'<dat>'
+# *postraw <host> head:'<csl no spaces, headers>' dat:'<dat>' ck:'<cookies>'
 async def postraw(msg):
     host = await splitmsg(msg, " ", 1)
     hd = await checkoptional(msg, 'head', {})
-    hd = await dictfromcsl(await chopcsl(hd))
+    hd = await dictfromcsl(msg, await chopcsl(hd)) if hd != {} else dict()
     dat = await checkoptional(msg, 'dat', '')
     ck = await checkoptional(msg, 'ck', '')
+    ck = await dictfromcsl(ck) if ck != '' else ck
     req = requests.post(host, headers=hd, data=dat, cookies=ck)
-    await sendchunk(msg, req.headers)
+    data = dump.dump_all(req)
+    await sendchunk(msg, data.decode('latin-1'), 350)
 
-
-# *getraw <host> head:'<csl no spaces, headers>' ck:'<cookies>'
+# *getraw <host> head:'<csl no spaces, headers>' ck:'<csl no spaces, cookies>' auth:'<authorization>'
 async def getraw(msg):
     host = await splitmsg(msg, " ", 1)
     hd = await checkoptional(msg, 'head', {})
     if hd != {}: hd = await dictfromcsl(await chopcsl(hd))
     ck = await checkoptional(msg, 'ck', '')
-    req = requests.get(host, headers=hd, cookies=ck)
-    await sendchunk(msg, req.headers)
+    auth = await checkoptional(msg, 'auth', '')
+    if len(auth) > 1: hd.update({"Authorization": auth})
+    if len(ck) > 0: hd.update({"Cookie": ck})
+    await msg.channel.send("Using auth" + str(auth))
+    req = requests.get(host, headers=hd)
+    data = dump.dump_all(req)
+    await sendchunk(msg, data.decode('latin-1'), 350)
 
 
 # util
@@ -366,19 +413,20 @@ async def splitmsg(msg, char, indx):
 # util
 async def sendchunk(msg, s, length=100):
     if type(s) == str:
-        for i in range(int(len(s)/length)):
-            await msg.channel.send(s[i*length:(i+1)*length])
+        chunkn = int(len(s)/length)
+        for i in range(chunkn):
+            await msg.channel.send("```" + (s[i*length:(i+1)*length] if i+1 != chunkn or len(s) % length == 0 else s[i*length:]) + "```")
             time.sleep(1)
     elif type(s) == requests.structures.CaseInsensitiveDict or type(s) == dict:
         for a in s:
-            await msg.channel.send(a + ": " + s[a])
+            await msg.channel.send("```" + a + ": " + s[a] + "```")
             time.sleep(1)
-    else: await msg.channel.send("Unknown response type")
+    else: await msg.channel.send("sendchunk(): Unknown response type")
 
 
 # util
-async def checkoptional(msg, s, default): return default if s not in msg.content else \
-    str(msg.content.lower().split(s+":\'")[1]).split("\'")[0]
+async def checkoptional(msg, s, default): return default if s + ":\'" not in msg.content else \
+    str(msg.content.split(s+":\'")[1]).split("\'")[0]
 
 # *bustdir <host> <filepath> ex:'<excluded codes>' alrt:'<alert codes>' start:'<index>'
 async def bustdir(msg):
@@ -390,12 +438,12 @@ async def bustdir(msg):
     alert = await checkoptional(msg, 'alrt', 403)
     excluded = [excluded] if "," not in str(excluded) else await chopcsl(excluded)
     alert = [alert] if "," not in str(alert) else await chopcsl(alert)
-    lst = "dirlists1.txt" if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
+    lst = "quickhits.txt" if len(msg.content.split(" ")) <= 2 else await splitmsg(msg, " ", 2)
     fnd, count = [], int(await checkoptional(msg, 'start', 0))
     try:
         path = os.getcwd() + (lst if os.getcwd()[-1] == "/" or lst[0] == "/" else "/" + lst)
-        if os.getcwd()[-1] == "/" and lst[0] == "/": path = os.getcwd() + url[1:]
-        with open(path, "r",encoding="utf-8" if "rockyou.txt" not in path else "latin-1") as dat:
+        if os.getcwd()[-1] == "/" and lst[0] == "/": path = os.getcwd() + lst[1:]
+        with open(path, "r",encoding="latin-1") as dat:
             await msg.channel.send("Found file at: " + path)
             lst = dat.read().split("\n")
     except FileNotFoundError:
@@ -403,17 +451,14 @@ async def bustdir(msg):
                                (lst if os.getcwd()[-1] == "/" or (len(lst) > 1 and lst[0] == "/") else "/" + lst))
         return
     await msg.channel.send("List aggregated...")
-    for dir in lst[count:]:
+    for dr in lst[count:]:
         count += 1
-        safe_url = url if url[-1] != "/" or (len(dir) > 1 and dir[0] != "/") else url[:-1]
-        safe_dir = dir if url[-1] == '/' or (len(dir) > 1 and dir[0]) == '/' else "/" + dir
-        myurl = safe_url + safe_dir
-        # try:
+        myurl = await formatlink(url, dr)
         k = requests.get(myurl, timeout=4)
         if debug or count % 15 == 0:
             if halt_flag:
                 await msg.channel.send("Canceling attack...")
-                await msg.channel.send("Final list: " + fnd)
+                await msg.channel.send("Final list: " + str(fnd))
                 halt_flag = False
                 return
             await msg.channel.send("Try #" + str(count) + ": " + myurl)
@@ -421,12 +466,9 @@ async def bustdir(msg):
             for hhh in k.history:
                 await msg.channel.send("redirect path: " + hhh.url + " status code: " + str(hhh.status_code))
         fd = True
-        # except:
-        #    await msg.channel.send("couldn't connect to " + myurl)
-        #    fnd = False
         if int(k.status_code) in [int(a) for a in excluded]:
             fd = False
-        if int(k.status_code) in [int(a) for a in alert]:
+        elif int(k.status_code) in [int(a) for a in alert]:
             await msg.channel.send("Found: " + str(k.status_code) + " at " + k.url)
             fd = False
         if fd:
@@ -434,7 +476,16 @@ async def bustdir(msg):
             fnd.append(str(k.url))
     await msg.channel.send("found: " + str(len(set(fnd))) + " directories")
     for b in set(found):
-        await msg.channel.send(url + b if (len(b) > 0 and b[0] == "/") or a[-1] == "/" else "/" + b)
+        await msg.channel.send(await formatlink(url, b))
+
+#util
+async def formatlink(url, dr):
+    url = str(url) if url[-1] != "#" else str(url[:-1])
+    dr = str(dr) if dr[0] != "#" else str(dr[1:])
+    if url[-1] in ["=","?"]: return url + dr if dr[0] not in["/","?","\\"] else dr[1:]
+    elif url[-1] == "/" and dr[0] == "/": return url + dr[1:]
+    elif url[-1] == "/" or dr[0] == "/": return url + dr
+    else: return url + "/" + dr
 
 
 # *info
@@ -467,7 +518,7 @@ async def hextostr(msg):
     hx = msg.content.split(" ")[1:]
     hx = str(str(hx).strip()).replace("\\", "").replace("x", "")
     hx = bytes.fromhex(hx[2:-2])
-    hx = hx.decode("utf-8")
+    hx = hx.decode("latin-1")
     await msg.channel.send(hx)
 
 async def strtourlhex(msg):
