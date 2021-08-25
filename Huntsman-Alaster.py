@@ -1,6 +1,6 @@
 # python-nmap
 import nmap
-import json, socket, discord, requests, time, io, os, sys, base64
+import json, socket, discord, requests, time, io, os, sys, base64, subprocess, signal
 from discord.ext import commands
 from lxml import html
 from scapy.layers.inet import traceroute
@@ -11,17 +11,20 @@ import jwt
 from myjwt.utils import jwt_to_json
 from myjwt.modify_jwt import signature
 from requests_toolbelt.utils import dump
+import re
 
 token = 'ODE2MTU3MzMwOTY5MzI5NjY0.YD23vw.AvT2vRlTdk-79TjUGhhL6Nv7fVQ'
 client = discord.Client()
 bot = commands.Bot('*')
 found = set()
-default_crawl_exclusions = 'google, github, facebook, wikipedia, twitter, .gov'
+default_crawl_exclusions = 'google,github,facebook,wikipedia,twitter,.gov'
 halt_keywords = ['halt', 'stop', 'quit', 'exit', 'abort', 'cancel', 'wait']
 halt_flag = False
+vpn_conn = None
+
 
 commands = {
-    **dict.fromkeys(['info', 'help', 'commands'], lambda x: info(x)),
+    **dict.fromkeys(['info', 'inf', 'commands'], lambda x: info(x)),
     **dict.fromkeys(['ls', 'list', 'lst', 'l'], lambda x: listdir(x)),
     **dict.fromkeys(['scan', 'nmap'], lambda x: scan(x)),
     **dict.fromkeys(['crawl', 'spider'], lambda x: crawl(x)),
@@ -31,9 +34,8 @@ commands = {
     **dict.fromkeys(['whois', 'who', 'dnslookup'], lambda x: whois(x)),
     **dict.fromkeys(['scrape', 'get'], lambda x: scrape(x)),
     **dict.fromkeys(['decodejwt', 'jwtdecode', 'jwt'], lambda x: decode_jwt(x)),
-    **dict.fromkeys(['decodeb64', 'b64decode'], lambda x: decodeb64(x)),
+    **dict.fromkeys(['b64', 'decodeb64', 'b64decode'], lambda x: decodeb64(x)),
     **dict.fromkeys(['hextostr', 'hex2str', 'decodehex', 'hexdecode', 'hstr'], lambda x: hextostr(x)),
-    **dict.fromkeys(['strtohex', 'hex', 'hexencode', 'ashex'], lambda x: strtohex(x)),
     **dict.fromkeys(['encodeb64', 'b64encode'], lambda x: encodeb64(x)),
     **dict.fromkeys(['inttobin', 'int2bin', 'bin', 'binint'], lambda x: int2binary(x)),
     **dict.fromkeys(['crackjwt', 'jwtcrack, breakjwt, jwtcracker, jwtbreaker'], lambda x: crackjwt(x)),
@@ -47,18 +49,51 @@ commands = {
     **dict.fromkeys(['dbhex', 'strdburlhex', 'dburlhex', 'dburlencode',
                      'doublehex', 'str2dburlhex', 'dbenc'], lambda x: strtodoubleurlhex(x)),
     **dict.fromkeys(['crackuser', 'crackusername', 'cracku', 'bruteuser', 'bfuser'], lambda x: crackuser(x)),
-    **dict.fromkeys(['crackpass', 'crackpassword', 'crackp', 'brutepass', 'bfpass'], lambda x: crackpass(x))
-}
+    **dict.fromkeys(['crackpass', 'crackpassword', 'crackp', 'brutepass', 'bfpass'], lambda x: crackpass(x)),
+    **dict.fromkeys(['loginfuzzer', 'fuzzlogin', 'credfuzzer', 'fuzzcreds', 'postfuzzer'], lambda x: loginfuzzer(x)),
+    **dict.fromkeys(['fullinfo', 'help', 'commandinf', 'finf'], lambda x: commandinfo(x)),
+    **dict.fromkeys(['vpn','openvpn','vpnstatus'], lambda x: toggle_vpn(x)),
+    **dict.fromkeys(['fuzzer', 'fuzz', 'repeater', 'repeat', 'getfuzzer'], lambda x: getfuzzer(x))}
+
+full_info_dict = {
+    **dict.fromkeys(['info', 'help', 'commands'], 'Usage: *info\nDescription: lists all commands.'),
+    **dict.fromkeys(['ls', 'list', 'lst', 'l'], 'Usage: *ls <path>\nDescription: lists files in a directory. leave path blank for \'./\'.'),
+    **dict.fromkeys(['scan', 'nmap'], 'Usage: *scan <host> ports:\'<ports>\' args:\'<args>\'\nDescription: scans an ip with nmap, default usages is \"nmap -sS -vvv -Pn -p 1-1024\"'),
+    **dict.fromkeys(['crawl', 'spider'], 'Usage: *crawl <host> <excludes>\nDescription: gets all links on a page, then each link on all of the pages found, etc.  Leave excludes blank for default \"google, github, facebook, wikipedia, twitter, .gov\".'),
+    **dict.fromkeys(['clear', 'delete', 'wipe'], 'Usage: *clear <num> or *clear all\nDescription: clears messages in a discord channel, clear all will clear messages until the bot times out.'),
+    **dict.fromkeys(['ping', 'ip'], 'Usage: *ping <host>\nDescription: attempts to ping a domain to get a site\'s IP.'),
+    **dict.fromkeys(['trace', 'traceroute'], 'Usage: *trace <host>\nDescription: attempts to use traceroute on a domain to find all IP\'s that a packet reaches during transit.'),
+    **dict.fromkeys(['whois', 'who', 'dnslookup'], 'Usage: *whois <host>\nDescription: attempts a dns look-up on a domain.'),
+    **dict.fromkeys(['scrape', 'get'], 'Usage *scrape <host>  split:\'<string>\' len:\'<len>\' regx:\'<regular expression>\'\nDescription: scrapes the html from a page, \'split\' splits the data into a comma separated list, \'len\' is the number of characters the bot will scrape. \'regx\' is the regular expression to use when carving values. Scrape can also be used with a regular expression in order to carve out matching values. EX: regx:\'<b>(.+?)</b>\''),
+    **dict.fromkeys(['decodejwt', 'jwtdecode', 'jwt'], 'Usage: *decodejwt <token>\nDescription: decodes a b64url encoded jwt, requires a <header>.<payload>.<signature> structure with len%4=0 length.'),
+    **dict.fromkeys(['b64','decodeb64', 'b64decode'], 'Usage: *b64 <string>\nDescription: decodes a b64 encoded string, must be len%4=0 structure.'),
+    **dict.fromkeys(['hextostr', 'hex2str', 'decodehex', 'hexdecode', 'hstr'], 'Usage: *hextostr <hexstr>\nDescription: decodes a string from hex to ascii.'),
+    **dict.fromkeys(['encodeb64', 'b64encode'], 'Usage: *encodeb64 <string>\nDescription: encodes a string to b64.'),
+    **dict.fromkeys(['inttobin', 'int2bin', 'bin', 'binint'], 'Usage: *inttobin <int> size:\'<size>\' base:\'<base>\'\nDescription: changes an integer to a different base, defaults to base 2 (binary).'),
+    **dict.fromkeys(['crackjwt', 'jwtcrack, breakjwt, jwtcracker, jwtbreaker'], 'Usage: *crackjwt <token> <filepath>\nDescription: attemps to crack the signature on a jwt via dictionary.'),
+    **dict.fromkeys(['forgejwt', 'makejwt', 'newjwt'], 'Usage: *forgejwt (comma separated list, no spaces) <payload> <key> enc:\'<encoding>\'\nDescription: creates a jwt using a predefined payload, signature, and encoding.  default encoding is HS256.'),
+    **dict.fromkeys(['post', 'scrapepost'], 'Usage: *post <host> (comma separated list, no spaces) <obj> dat:\'<data>\'\nDescription: scrapes a webpage after sending data via HTTP POST.'),
+    **dict.fromkeys(['postraw', 'rawpost'], 'Usage: *postraw <host> head:\'(comma separated list, no spaces) <headers>\' dat:\'<dat>\' ck:\'<cookies>\'\nDescription: gets raw data (html + HTTP headers) from a post request.'),
+    **dict.fromkeys(['getraw', 'rawget'], 'Usage: *getraw <host> head:\'(comma separated list, no spaces) <headers>\' ck:\'(comma separated list, no spaces) <cookies>\' auth:\'<authorization>\'\nDescription: gets raw data (html + HTTP headers) from a get request.'),
+    **dict.fromkeys(['bustdir', 'dirbust', 'dirbuster', 'dirsearch', 'searchdirs'], 'Usage: *bustdir <host> <filepath> ex:\'<excluded codes>\' alrt:\'<alert codes>\' start:\'<index>\'\nDescription: tries to find valid directories via a dictionary attack, \'start\' will skip directory entries in the list until it reaches the number set.'),
+    **dict.fromkeys(['snglhex', 'strurlhex', 'urlhex', 'urlencode',
+                     'singlehex', 'snglhex', 'str2urlhex'], 'Usage: *snglhex <string>\nDescription: encodes a string to url hex (%<value>).'),
+    **dict.fromkeys(['dbhex', 'strdburlhex', 'dburlhex', 'dburlencode',
+                     'doublehex', 'str2dburlhex', 'dbenc'], 'Usage: *dbhex <string>\nDescription: double encodes a string to url hex (%25<value>).'),
+    **dict.fromkeys(['crackuser', 'crackusername', 'cracku', 'bruteuser', 'bfuser'], 'Usage: *crackuser <host> <filepath> ex:\'<excludes>\' start:\'<startpoint>\' pw:\'<password>\'\nDescription: attempts a dictionary attack against the username attribute of a website (only useful for sites that disclose whether a username is valid).'),
+    **dict.fromkeys(['crackpass', 'crackpassword', 'crackp', 'brutepass', 'bfpass'], 'Usage: *crackpass <host> <filepath> ex:\'<excludes>\' start:\'<startpoint>\' user:\'<username>\'\nDescription: attemps a dictionary attack against the password attribute of a website.'),
+    **dict.fromkeys(['loginfuzzer','fuzzlogin','credfuzzer', 'fuzzcreds', 'postfuzzer', 'fuzz'],'Usage: *postfuzzer <host> list:\'<list of chars>\' usr:\'<user var name>\' pass:\'<pw var name>\' find:\'<kw to find on page>\' usrpl1:\'<payload to be added before fuzzing>\' userpl2:\'<payload to be added after fuzzing>\' passpl1:\'<payload to be added before fuzzing>\' passpl2:\'<payload added after fuzzing>\' usrperm:\'<unfuzzed username>\' passperm:\'<unfuzzed pass>\'\nDescription: attempts to fuzz variables in username or password elements of a website, especially useful forsome sql injections.'),
+     **dict.fromkeys(['vpn','openvpn','vpnstatus'], 'Usage: *vpn <filename/index> to connect or <\'off\'> and/or <\'status\'>\nDescription: can connect, disconnect, and display the status of openvpn based connections'),
+     **dict.fromkeys(['fuzzer','fuzz','repeater','repeat','getfuzzer'], 'Usage: *fuzzer <host> file:\'<filepath>\' or list:\'<comma separated list>\'\nDescription: allows alaster to fuzz directories or variables in a url, use $F$ to represent where the fuzzed variable should be placed. EX: *fuzz http://www.google.com/backup.$F$ file:\'extensions.txt\' carve:\'<label>(.+?)</label>\'')
+    }
 
 
 # init function
 def initiate(): client.run(token)
 
-
 @client.event
 async def on_ready(): print('We have logged in as {0.user}'.format(client))
     
-
 @client.event
 async def on_message(msg):
     global halt_flag, halt_keywords
@@ -67,11 +102,6 @@ async def on_message(msg):
         for key in halt_keywords:
             if key in mes: halt_flag = True
         if mes[0] == bot.command_prefix: await process_commands(msg)
-
-
-async def strtohex(msg):
-    s = await splitmsg(msg, " ", 1)
-    pass
 
 
 #clear <num> or all for as many as the bot can without timing out
@@ -84,6 +114,8 @@ async def clear(msg):
         async for x in msg.channel.history(limit=number):
             if halt_flag:
                 await msg.channel.send("Cancelling...")
+                halt_flag = False
+                return
             if counter < number:
                 await x.delete()
                 counter += 1
@@ -101,10 +133,14 @@ async def process_commands(msg):
     for i in range(len(mes)): 
         if mes[i] == "" and len(mes) > i and mes[i+1] == "": del mes[i+1]
         func = commands.get(str(msg.content.split(" ")[0][1:]).lower())
+    if func is None: 
+        await msg.channel.send("Error: command not recognized")
+        return
     try:
         await func(msg)
-    except TypeError:
-        await msg.channel.send("Unrecognized command: " + msg.content.split(" ")[0][1:])
+    except Exception as error:
+        await msg.channel.send(repr(error))
+
 
 # *scan <host> ports:'<ports>' args:'<args>'
 async def scan(msg):
@@ -112,11 +148,10 @@ async def scan(msg):
     nm = nmap.PortScanner()
     host = await splitmsg(msg, " ", 1)
     port = await checkoptional(msg, 'ports',"1-1024")
-    args = await checkoptional(msg, 'args',"-sS -vv")
+    args = await checkoptional(msg, 'args',"-sC -sV -vvv")
     nm.scan(hosts=host, ports=port, arguments=args)
     await msg.channel.send("Running command: " + nm.command_line())
     await pretty_nmap(nm, msg)
-
 
 # util
 async def pretty_nmap(nm, msg):
@@ -135,7 +170,32 @@ async def pretty_nmap(nm, msg):
             await msg.channel.send(outp)
             outp = ""
         except discord.errors.HTTPException:
-            await msg.channel.send("Caught an HTTP exception...")
+            await msg.channel.send("Caught an HTTP exception")
+
+
+async def toggle_vpn(msg):
+    global vpn_conn
+    if vpn_conn is not None:
+        for f in ['off','stop','disable','quit','exit','abort','disconnect']:
+            if f in msg.content: 
+                await msg.channel.send("Disconnecting from vpn, please wait...")
+                x = vpn_conn
+                os.killpg(os.getpgid(x.pid), signal.SIGTERM)
+                time.sleep(5)
+                vpn_conn = None
+                os.system("sudo killall openvpn")
+                await msg.channel.send("VPN is active: " + str(vpn_conn is not None))
+        return
+    else:
+        for i in range(4):
+            if str(i) in msg.content: file = {1:'htblab.ovpn',2:'tryhackme.ovpn',3:'htbarena.ovpn'}.get(i) 
+        for f in ['htblab.ovpn','htbarena.ovpn','tryhackme.ovpn']:
+            if f in msg.content: file = f
+        if file is not None:
+            x = subprocess.Popen(['sudo', 'openvpn', '--auth-nocache', '--config', "/home/pi/Huntsman-Alaster/"+file],preexec_fn=os.setsid)
+            vpn_conn = x
+            await msg.channel.send("VPN is active: " + str(vpn_conn is not None) +"\nUsing " + file)
+        else: await msg.channel.send("Could not find file.")
 
 
 # *crawl <url> <excludes>
@@ -146,15 +206,11 @@ async def crawl(msg):
     excludes = await chopcsl(default_crawl_exclusions) if len(msg.content.split(" ")) <= 2 else \
         await chopcsl(await splitmsg(msg, " ", 2))
     await recursive_crawl(url, msg, excludes)
-    outp, i = "", 0
+    outp = ""
+    await msg.channel.send("Found urls:\n")
     for a in found:
-        i += 1
-        if a.startswith("http") or a.startswith("www") or "?" in a:
-            outp += a + '\n'
-        if i % 5 == 0:
-            await msg.channel.send("Final list #" + str(int(i / 8)) + ": \n" + str(outp))
-            outp = ""
-    if outp != "": await msg.channel.send("Final list #" + str(int(i / 8) + 1) + ": \n" + str(outp))
+        outp += a + '\n'
+        await msg.channel.send(outp)
     found = set()
     if halt_flag: halt_flag = False
 
@@ -162,30 +218,38 @@ async def crawl(msg):
 # util
 async def recursive_crawl(url, msg, excludes):
     global found, halt_flag
+    print(url)
     for ex in excludes:
-        if url.__contains__(ex):
+        if ex in url:
             print("out of scope link")
             return
-    resp = requests.get(url)
+        try: 
+            if len(url) > 1:
+                resp = requests.get(url)
+            else: return found
+        except:
+            await msg.channel.send("couldn't get " + url)
+            return found
     page = html.fromstring(resp.content)
     links = set(page.xpath('//a/@href'))
     links.update(page.xpath('//img/@src'))
     found.add(resp.url)
     for link in links:
-        if link not in found and await formatlink(url, link) not in found and await formatlink(url.split("/")[:-1],link) not in found and link[0] != "#" and link != "./":
-            for a in [link, await formatlink(url,link), await formatlink(url.split("/")[:-1],link)]:
-                    try: 
+        if len(link) > 0 and link not in found and await formatlink(url, link) not in found and link[0] != "#" and link not in ["./"," ","  ","../"]:
+            for a in [link if link.startswith("ht") else url, await formatlink(url,link)]:
+                    try:
+                        print(a)
                         m = requests.get(a)
                         if int(m.status_code) != 404: found.add(a)
                     except: continue
-            await msg.channel.send("found: " + str(link))
-            if halt_flag:
-                await msg.channel.send("cancelling...")
-                return found
-            try: await recursive_crawl(link, msg, excludes)
-            except requests.exceptions.MissingSchema:
-                try: await recursive_crawl(await formatlink(url, link), msg, excludes)
-                except requests.exceptions.MissingSchema: await recursive_crawl(await formatlink(url.split("/")[:-1], link), msg, excludes)
+                    await msg.channel.send("found: " + str(url+link + " with status code of " + str(m.status_code)))
+                    if halt_flag:
+                        await msg.channel.send("cancelling...")
+                        return found
+                    try: await recursive_crawl(link, msg, excludes)
+                    except requests.exceptions.MissingSchema:
+                        try: await recursive_crawl(await formatlink(url, link), msg, excludes)
+                        except: continue
                         
 # *ping <host>
 async def ping(msg):
@@ -234,14 +298,27 @@ async def whois(msg):
     await msg.channel.send(a)
 
 
-# *scrape <host> split:'<string>' len:'<len>'
+# *scrape <host> split:'<string>' len:'<len>' regx:'<regular expression>'
 async def scrape(msg):
+    global halt_flag
     host = await splitmsg(msg, " ", 1)
     length = await checkoptional(msg, 'len', 10000)
     splt = await checkoptional(msg, 'split', None)
-    msg.channel.send("Scraping data...")
+    regx = await checkoptional(msg, 'regx', '')
+    await msg.channel.send("Scraping data...")
     data = requests.get(host)
     d = data.text if len(data.text) <= length else data.text[:length]
+    if len(regx)>0:
+        compiled = re.compile(regx)
+        filtered = compiled.findall(data.text)
+        for line in filtered: 
+            if halt_flag:
+                halt_flag = False
+                return
+            await msg.channel.send(line)
+            time.sleep(1)
+        await msg.channel.send("Filtered data complete")
+        return
     if splt is not None: d = d.split(splt)
     c, outp = 0, ''
     for dat in d:
@@ -251,7 +328,43 @@ async def scrape(msg):
             await msg.channel.send(outp)
             time.sleep(1)
             c, outp = 0, ''
-    if outp != '': await msg.channel.send(outp)
+            if halt_flag:
+                halt_flag = False
+                return
+    if len(out) > 0: await msg.channel.send(outp)
+
+
+#*postfuzzer <host> list:'<list of chars>' usr:'<user var name>' pass:'<pw var name>' find:'<kw to find on page>' usrpl1:'<payload to be added before fuzzing>' userpl2:'<payload to be added after fuzzing>' passpl1:'<payload to be added before fuzzing>' passplw:'<payload added after fuzzing>' usrperm:'<unfuzzable username>' passperm:'<unfuzzable pass>'
+async def loginfuzzer(msg):
+    global halt_flag
+    host = await splitmsg(msg, " ", 1)
+    lst = await checkoptional(msg, 'list', 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890')
+    usr = await checkoptional(msg, 'usr', 'username')
+    pw = await checkoptional(msg, 'pass', 'password')
+    find = await checkoptional(msg, 'find', None)
+    usrpl1, usrpl2 = await checkoptional(msg, 'usrpl1', ''), await checkoptional(msg, 'usrpl2', '')
+    passpl1, passpl2 = await checkoptional(msg, 'passpl1', ''), await checkoptional(msg, 'passpl2', '')
+    usrperm, passperm = await checkoptional(msg, 'usrperm', None), await checkoptional(msg, 'passperm', None)
+    c = 0
+    for a in lst:
+        c += 1
+        dat = {usr : usrpl1+a+usrpl2 if usrperm is None else usrperm, pw : passpl1+a+passpl2 if passperm is None else passperm}
+        req = requests.post(url=host,data=dat)
+        mylast = req.text
+        if halt_flag:
+            await msg.channel.send("Cancelling...")
+            halt_flag = False
+            return
+        if c % 10 == 0 and find is not None: await msg.channel.send("data: " + str(dat) + "\n" + req.text)
+        if mylast != req.text or find is not None and find in req.text or req.status_code == 404:
+            await msg.channel.send(req.text)
+            await msg.channel.send("keys: " + str(dat))
+            return
+        if find is None or len(find) <= 0: 
+            time.sleep(1)
+            await msg.channel.send(dat)
+            await msg.channel.send(req.text)
+    await msg.channel.send('found nothing matching kw: ' + find) 
 
 
 # decodejwt <token>
@@ -273,12 +386,12 @@ async def decodeb64(msg):
 
 # encodeb64 <string>
 async def encodeb64(msg):
-    string = bytes(await splitmsg(msg, " ", 1), 'utf-8')
+    string = bytes(await wholestrafter(msg, " ", 1), 'utf-8')
     ans = base64.b64encode(string)
     await msg.channel.send(ans.decode("utf-8"))
 
 
-# *inttobin size:'<size>' base:'<base>'
+# *inttobin <int> size:'<size>' base:'<base>'
 async def int2binary(msg):
     await msg.channel.send("Calculating")
     try:
@@ -301,12 +414,14 @@ async def int2binary(msg):
     await msg.channel.send(str(bin(int(outp)))[2:])
 
 
-# *crackjwt <token> <filepath>
+# *crackjwt <token> <filepath> enc:'<encoding>'
 async def crackjwt(msg):
+    global halt_flag
     await msg.channel.send("Cracking jwt...")
     payload = await splitmsg(msg, " ", 1)
     lst = await splitmsg(msg, " ", 2)
     payld = jwt_to_json(payload)
+    enc = await checkoptional(msg,"enc",None)
     with open(lst, encoding="latin-1") as file:
         all_password,c = [line.rstrip() for line in file], 0
     await msg.channel.send("List aggregated, starting attack...")
@@ -314,8 +429,9 @@ async def crackjwt(msg):
         c += 1
         if halt_flag:
             await msg.channel.send("Cancelling attack...")
+            halt_flag = False
             return
-        newpayld = signature(payld, password)
+        newpayld = signature(payld, password) if enc is None else jwt.encode(payld, password, enc)
         if c % 5000 == 0: await msg.channel.send("Try #:" + str(c) + " " + password + " : " + str(newpayld))
         newsig = '' if len(str(newpayld).split(".")) <= 2 else str(newpayld).split(".")[2]
         if len(newsig) > 3 and len(str(payld).split(".")) > 2 and newsig == str(payld).split(".")[2]:
@@ -332,15 +448,15 @@ async def forgejwt(msg):
     enc = await checkoptional(msg, 'enc', 'HS256')
     values = await dictfromcsl(msg, payload)
     if enc == 'none':
-        encoded = jwt.encode(values, None, enc)
+        encoded = jwt.encode(values, None, algorithm=enc)
         await msg.channel.send(encoded)
         return
     if key != '':
-        encoded = jwt.encode(values, key, enx)
+        encoded = jwt.encode(values, key, algorithm=enc)
     else: 
         encoded = list()
-        encoded.append(jwt.encode(values, key, enc))
-        encoded.append(jwt.encode(values, ' ', enc))
+        encoded.append(jwt.encode(values, key, algorithm=enc))
+        encoded.append(jwt.encode(values, ' ', algorithm=enc))
     await msg.channel.send(encoded)
 
 
@@ -365,8 +481,8 @@ async def post(msg):
 async def chopcsl(csl) -> list: return str(csl).strip(" ").split(",")
 
 
-# util
-async def dictfromcsl(msg, csl):
+# util (takes a list)
+async def dictfromcsl(msg, csl: list) -> dict:
     pst = dict()
     if len(csl) < 2 or len(csl) % 2 != 0:
         await msg.channel.send("Comma separated list: " + str(csl) + " must be at least length 2 and even.")
@@ -412,6 +528,7 @@ async def splitmsg(msg, char, indx):
 
 # util
 async def sendchunk(msg, s, length=100):
+    global halt_flag
     if type(s) == str:
         chunkn = int(len(s)/length)
         for i in range(chunkn):
@@ -421,12 +538,19 @@ async def sendchunk(msg, s, length=100):
         for a in s:
             await msg.channel.send("```" + a + ": " + s[a] + "```")
             time.sleep(1)
+            if halt_flag:
+                halt_flag = False
+                return
     else: await msg.channel.send("sendchunk(): Unknown response type")
 
 
 # util
-async def checkoptional(msg, s, default): return default if s + ":\'" not in msg.content else \
-    str(msg.content.split(s+":\'")[1]).split("\'")[0]
+async def checkoptional(msg, s, default): 
+    filt = [":\"\"",":\'\'",":``",":\"",":\'",":`"]
+    for b in filt:    
+        if s + b in msg.content: return str(msg.content.split(s+b)[1]).split(b.strip(":"))[0]
+    return default
+
 
 # *bustdir <host> <filepath> ex:'<excluded codes>' alrt:'<alert codes>' start:'<index>'
 async def bustdir(msg):
@@ -480,6 +604,12 @@ async def bustdir(msg):
 
 #util
 async def formatlink(url, dr):
+    print(url, dr)
+    url = url.replace(" ","")
+    dr = dr.replace(" ","")
+    if len(url) <= 3 or len(dr) <= 0: 
+        print("invalid link/dir")
+        return
     url = str(url) if url[-1] != "#" else str(url[:-1])
     dr = str(dr) if dr[0] != "#" else str(dr[1:])
     if url[-1] in ["=","?"]: return url + dr if dr[0] not in["/","?","\\"] else dr[1:]
@@ -498,6 +628,11 @@ async def info(msg):
         lst = commands[key]
     await msg.channel.send(outp)
 
+async def commandinfo(msg):
+    global full_info_dict
+    key = await splitmsg(msg, " ", 1)
+    await msg.channel.send(key + "\n" + full_info_dict[key])
+
 
 # *listdir <path>
 async def listdir(msg):
@@ -515,22 +650,30 @@ async def listdir(msg):
 
 
 async def hextostr(msg):
-    hx = msg.content.split(" ")[1:]
+    hx = await wholestrafter(msg, 1, " ")
     hx = str(str(hx).strip()).replace("\\", "").replace("x", "")
     hx = bytes.fromhex(hx[2:-2])
     hx = hx.decode("latin-1")
     await msg.channel.send(hx)
 
 async def strtourlhex(msg):
-    s = await splitmsg(msg, " ", 1)
+    s = await wholestrafter(msg, 1, " ")
     ret = ""
     for a in s:
         ret += "%" + str(bytes.hex(a.encode("utf-8")))
     await msg.channel.send(ret)
 
 
+#util
+async def wholestrafter(msg, index, char):
+    a,b,c = msg.content, False, ""
+    for d in a:
+        if b: c += d
+        if d == char: b = True
+    return c
+
 async def strtodoubleurlhex(msg):
-    s = await splitmsg(msg, " ", 1)
+    s = await wholestrafter(msg, 1, " ")
     ret = ""
     for a in s:
         ret += "%25" + str(bytes.hex(a.encode("utf-8")))
@@ -587,7 +730,7 @@ async def crackpass(msg):
             data = dat.read().split("\n")
     except FileNotFoundError:
         await msg.channel.send("File couldn't be found at path: " + os.getcwd() +
-                               (data if os.getcwd()[-1] == "/" or (len(data) > 1 and data[0] == "/") else "/" + data))
+                           (data if os.getcwd()[-1] == "/" or (len(data) > 1 and data[0] == "/") else "/" + data))
     obj, count = {'username': name, 'password': ''}, startpoint
     for pw in data[startpoint:]:
         if halt_flag:
@@ -603,6 +746,41 @@ async def crackpass(msg):
             return
         if count % 25 == 0: await msg.channel.send("attempt: " + str(count) + " last pass used: " + pw)
     await msg.channel.send("couldn't find it")
+
+#*fuzz <host> file:'<filepath>' or list:'csl' carve:'<regex>'
+async def getfuzzer(msg):
+    global halt_flag
+    host = await splitmsg(msg, " ", 1)
+    fil = await checkoptional(msg, 'file', '')
+    lst = await checkoptional(msg, 'list', '')
+    carve = await checkoptional(msg, 'carve', '(.+?)')
+    compiled = re.compile(carve)
+    print(fil)
+    print(lst.split("\n"))
+    print(host)
+    if len(fil) + len(lst) == 0:
+        await msg.channel.send("Found no valid file or list entries")
+        return
+    elif len(fil) > 1:
+        with open(fil,'r') as mydat:
+            for line in mydat:
+                mes = requests.get(host.replace("$F$",line)).text
+                compiled.findall(mes)
+                if halt_flag:
+                    halt_flag = False
+                    return
+                await sendchunk(msg, mes)
+        await msg.channel.send("Fuzz by file completed.")
+    else:
+        lst = lst.split("\n") if "\n" in lst else lst.split(",")
+        for line in lst:
+            mes = requests.get(host.replace("$F$",line)).text
+            compiled.findall(mes)
+            if halt_flag:
+                halt_flag = False
+                return
+            await senchunk(msg, mes)
+        await msg.channel.send("Fuzz by list completed.")
 
 
 initiate()
