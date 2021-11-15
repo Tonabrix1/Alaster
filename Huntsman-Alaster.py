@@ -13,7 +13,7 @@ from myjwt.modify_jwt import signature
 from requests_toolbelt.utils import dump
 import re
 
-token = 'ODE2MTU3MzMwOTY5MzI5NjY0.YD23vw.AvT2vRlTdk-79TjUGhhL6Nv7fVQ'
+token = os.getenv('token')
 client = discord.Client()
 bot = commands.Bot('*')
 found = set()
